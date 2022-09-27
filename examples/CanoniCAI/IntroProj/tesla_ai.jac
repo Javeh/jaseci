@@ -1,3 +1,17 @@
+node dialogue_root:dialogue_state {
+    has name = "dialogue_root";
+    can nlu {
+        ::classify_intent;
+    }
+    can process {
+        visitor.wlk_ctx["next_state"] = (-[intent_transition(intent==visitor.wlk_ctx["intent"])]->)[0];
+    }
+    can nlg {
+        visitor.response = "Sorry I can't handle that just yet. Anything else I can help you with?";
+    }
+}
+
+
 node dialogue_state {
     can bi_enc.infer;
     can tfm_ner.extract_entity;
@@ -13,7 +27,23 @@ node dialogue_state {
     }
 
     can extract_entities {
-        // Entity extraction logic will be added a bit later on.
+        res = tfm_ner.extract_entity(visitor.question);
+        for ent in res {
+            ent_type = ent["entity_value"];
+            ent_text = ent["entity_text"];
+            if (!(ent_type in visitor.wlk_ctx["entities"])){
+                visitor.wlk_ctx["entities"][ent_type] = [];
+            }
+            visitor.wlk_ctx["entities"][ent_type].l::append(ent_text);
+        }
+    }
+    
+    can process {
+        if (visitor.wlk_ctx["prev_state"]): visitor.wlk_ctx["respond"] = true;
+        else {
+            visitor.wlk_ctx["next_state"] = net.root();
+            visitor.wlk_ctx["prev_state"] = here;
+        }
     }
 
     can init_wlk_ctx {
@@ -41,18 +71,45 @@ node dialogue_state {
     can nlg {}
 }
 
-node dialogue_root:dialogue_state {
-    has name = "dialogue_root";
-    can nlu {
-        ::classify_intent;
-    }
-    can process {
-        visitor.wlk_ctx["next_state"] = (-[intent_transition(intent==visitor.wlk_ctx["intent"])]->)[0];
-    }
-    can nlg {
-        visitor.response = "Sorry I can't handle that just yet. Anything else I can help you with?";
+edge intent_transition {
+    has intent;
+}
+
+
+walker init {
+    root {
+        spawn here --> graph::dialogue_system;
+        spawn here walker::talk;
     }
 }
+
+walker talk {
+    has question;
+    has wlk_ctx = {};
+    has response;
+    root {
+        take --> node::dialogue_root;
+    }
+    dialogue_state {
+        if (!question) {
+            question = std.input("Question (Ctrl-C to exit)> ");
+            here::init_wlk_ctx;
+        }
+        here::nlu;
+        here::process;
+        if (visitor.wlk_ctx["respond"]) {
+            here::nlg;
+            std.out(response);
+            question = null;
+            take here;
+        } else {
+            take visitor.wlk_ctx["next_state"] else: take here;
+        }
+    }
+}
+
+
+
 
 
 
@@ -126,5 +183,68 @@ node td_canceled:dialogue_state {
     has name = "test_drive_canceled";
     can nlg {
         visitor.response = "No worries. We look forward to hearing from you in the future!";
+    }
+}
+
+
+edge entity_transition {
+    has entities;
+}
+
+graph tesla_ai {
+    has anchor dialogue_root;
+    spawn {
+        dialogue_root = spawn node::dialogue_root;
+        test_drive_state = spawn node::test_drive_state;
+        td_confirmation = spawn node::td_confirmation;
+        td_confirmed = spawn node::td_confirmed;
+        td_canceled = spawn node::td_canceled;
+
+        dialogue_root -[intent_transition(intent="test drive")]-> test_drive_state;
+        test_drive_state -[intent_transition(intent="cancel")]-> td_canceled;
+        test_drive_state -[entity_transition(entities=["name", "address"])]-> td_confirmation;
+        test_drive_state -[intent_transition(intent="provide name or address")]-> test_drive_state;
+        td_confirmation - [intent_transition(intent="yes")]-> td_confirmed;
+        td_confirmation - [intent_transition(intent="no")]-> test_drive_state;
+        td_confirmation - [intent_transition(intent="cancel")]-> td_canceled;
+
+        faq_root = spawn graph::faq;
+        dialogue_root -[intent_transition(intent="i have a question")]-> faq_root;
+    }
+}
+
+node cai_state {
+    has name;
+    can init_wlk_ctx {
+        new_wlk_ctx = {
+            "intent": null,
+            "entities": {},
+            "prev_state": null,
+            "next_state": null,
+            "respond": false
+        };
+        if ("entities" in visitor.wlk_ctx) {
+            // Carry over extracted entities from previous interaction
+            new_wlk_ctx["entities"] = visitor.wlk_ctx["entities"];
+        }
+        visitor.wlk_ctx = new_wlk_ctx;
+    }
+    can nlu {}
+    can process {
+        if (visitor.wlk_ctx["prev_state"]): visitor.wlk_ctx["respond"] = true;
+        else {
+            visitor.wlk_ctx["next_state"] = net.root();
+            visitor.wlk_ctx["prev_state"] = here;
+        }
+    }
+    can nlg {}
+}
+
+
+node faq_state:cai_state {
+    has question;
+    has answer;
+    can nlg {
+        visitor.response = here.answer;
     }
 }
