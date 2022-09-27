@@ -1,17 +1,3 @@
-node dialogue_root:dialogue_state {
-    has name = "dialogue_root";
-    can nlu {
-        ::classify_intent;
-    }
-    can process {
-        visitor.wlk_ctx["next_state"] = (-[intent_transition(intent==visitor.wlk_ctx["intent"])]->)[0];
-    }
-    can nlg {
-        visitor.response = "Sorry I can't handle that just yet. Anything else I can help you with?";
-    }
-}
-
-
 node dialogue_state {
     can bi_enc.infer;
     can tfm_ner.extract_entity;
@@ -28,14 +14,6 @@ node dialogue_state {
 
     can extract_entities {
         // Entity extraction logic will be added a bit later on.
-    }
-
-    can process {
-        if (visitor.wlk_ctx["prev_state"]): visitor.wlk_ctx["respond"] = true;
-        else {
-            visitor.wlk_ctx["next_state"] = net.root();
-            visitor.wlk_ctx["prev_state"] = here;
-        }
     }
 
     can init_wlk_ctx {
@@ -63,43 +41,18 @@ node dialogue_state {
     can nlg {}
 }
 
-edge intent_transition {
-    has intent;
-}
-
-
-walker init {
-    root {
-        spawn here --> graph::dialogue_system;
-        spawn here walker::talk;
+node dialogue_root:dialogue_state {
+    has name = "dialogue_root";
+    can nlu {
+        ::classify_intent;
+    }
+    can process {
+        visitor.wlk_ctx["next_state"] = (-[intent_transition(intent==visitor.wlk_ctx["intent"])]->)[0];
+    }
+    can nlg {
+        visitor.response = "Sorry I can't handle that just yet. Anything else I can help you with?";
     }
 }
-
-walker talk {
-    has question;
-    can bi_enc.infer;
-    root {
-        question = std.input("> ");
-        take --> node::dialogue_root;
-    }
-    dialogue_root {
-        intent_labels = -[intent_transition]->.edge.intent;
-        predicted_intent = bi_enc.infer(
-            contexts = [question],
-            candidates = intent_labels,
-            context_type = "text",
-            candidate_type = "text"
-        )[0]["predicted"]["label"];
-        take -[intent_transition(intent==predicted_intent)]-> node::dialogue_state;
-    }
-    dialogue_state {
-        std.out(here.response);
-    }
-}
-
-
-
-
 
 
 
@@ -173,33 +126,5 @@ node td_canceled:dialogue_state {
     has name = "test_drive_canceled";
     can nlg {
         visitor.response = "No worries. We look forward to hearing from you in the future!";
-    }
-}
-
-
-edge entity_transition {
-    has entities;
-}
-
-graph dialogue_system {
-    has anchor dialogue_root;
-    spawn {
-        dialogue_root = spawn node::dialogue_root;
-        test_drive_state = spawn node::test_drive_state;
-        td_confirmation = spawn node::td_confirmation;
-        td_confirmed = spawn node::td_confirmed;
-        td_canceled = spawn node::td_canceled;
-
-        how_to_order_state = spawn node::how_to_order_state;
-
-        dialogue_root -[intent_transition(intent="test drive")]-> test_drive_state;
-        test_drive_state -[intent_transition(intent="cancel")]-> td_canceled;
-        test_drive_state -[entity_transition(entities=["name", "address"])]-> td_confirmation;
-        test_drive_state -[intent_transition(intent="provide name or address")]-> test_drive_state;
-        td_confirmation - [intent_transition(intent="yes")]-> td_confirmed;
-        td_confirmation - [intent_transition(intent="no")]-> test_drive_state;
-        td_confirmation - [intent_transition(intent="cancel")]-> td_canceled;
-
-        dialogue_root -[intent_transition(intent="order a tesla")]-> how_to_order_state;
     }
 }
